@@ -1,4 +1,4 @@
-# cognito-go-auth
+# cognito-go-auth [![Build Status](https://travis-ci.org/nordcloud/cognito-go-auth.svg?branch=master)](https://travis-ci.org/nordcloud/cognito-go-auth)
 
 Cognito-go-auth is the golang library that allows you to easily generate Cognito Authentication Token and sign requests. Currently it supports only **Google federated logins** using Cognito hosted UI.
 
@@ -68,3 +68,4 @@ Example:
 ```
 cognito-go-auth -H "Header1: Header1Value" -X POST https://api.application.nordcloudapp.com
 ```
+
