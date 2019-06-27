@@ -2,6 +2,9 @@
 
 Cognito-go-auth is the golang library that allows you to easily generate Cognito Authentication Token and sign requests. Currently it supports only **Google federated logins** using Cognito hosted UI.
 
+![](doc/preview.gif)
+
+
 ### How it works?
 
 - It creates HTTP server on the localhost:3000 and serves HTML page with the Cognito hosted UI.
