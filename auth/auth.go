@@ -110,7 +110,10 @@ func (c *CognitoAuth) GetToken() (*CognitoToken, error) {
 	defer server.Close()
 	go c.serveWebSocket(responseChan, errorChan)
 	go c.serveAuthPage(errorChan, &server)
-	openBrowser(fmt.Sprintf("http://localhost:%s", serverPort))
+	err := openBrowser(fmt.Sprintf("http://localhost:%s", serverPort))
+	if err != nil {
+		return nil, fmt.Errorf("cannot open the Internet browser for authentication: %s", err.Error())
+	}
 
 	select {
 	case err := <-errorChan:
@@ -132,27 +135,32 @@ func (c *CognitoAuth) hash() string {
 }
 
 func (c *CognitoAuth) getTokenFromFile() *CognitoToken {
-	file, err := os.OpenFile(c.getTokenPath(), os.O_RDONLY, 0660)
+	fileName := c.getTokenPath()
+	file, err := os.OpenFile(fileName, os.O_RDONLY, 0660)
 	if err != nil {
 		return nil
 	}
 
 	b, err := ioutil.ReadAll(file)
 	if err != nil {
+		os.Remove(fileName)
 		return nil
 	}
 
 	token := &CognitoToken{}
 	err = json.Unmarshal(b, token)
 	if err != nil {
+		os.Remove(fileName)
 		return nil
 	}
 	token.auth = c
 
-	if token.ExpirationDate.Unix() >= time.Now().Unix() {
-		return token
+	if token.ExpirationDate.Unix() < time.Now().Unix() {
+		os.Remove(fileName)
+		return nil
 	}
-	return nil
+
+	return token
 }
 
 func (c *CognitoAuth) saveToken(token CognitoToken) {
@@ -164,6 +172,11 @@ func (c *CognitoAuth) saveToken(token CognitoToken) {
 	}
 
 	data, _ := json.Marshal(token)
+	err = file.Truncate(0)
+	if err != nil {
+		log.Warn("Failed to clear file token", err.Error())
+		return
+	}
 	_, err = file.Write(data)
 	if err != nil {
 		log.Warn("Failed to write to file token", err.Error())

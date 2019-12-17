@@ -81,7 +81,7 @@ func cognitohosteduilauncherJs() (*asset, error) {
 		return nil, err
 	}
 
-	info := bindataFileInfo{name: "cognitohosteduilauncher.js", size: 869768, mode: os.FileMode(436), modTime: time.Unix(1570780544, 0)}
+	info := bindataFileInfo{name: "cognitohosteduilauncher.js", size: 869768, mode: os.FileMode(436), modTime: time.Unix(1570781493, 0)}
 	a := &asset{bytes: bytes, info: info}
 	return a, nil
 }
