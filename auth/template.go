@@ -53,11 +53,11 @@ func openBrowser(url string) error {
 	log.Debug("Opening browser")
 	switch runtime.GOOS {
 	case "linux":
-		return exec.Command("xdg-open", url).Start()
+		return exec.Command("xdg-open", url).Run()
 	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Run()
 	case "darwin":
-		return exec.Command("open", url).Start()
+		return exec.Command("open", url).Run()
 	default:
 		return fmt.Errorf("unsupported platform")
 	}
