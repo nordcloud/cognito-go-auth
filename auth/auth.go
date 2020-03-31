@@ -155,7 +155,7 @@ func (c *CognitoAuth) getTokenFromFile() *CognitoToken {
 	}
 	token.auth = c
 
-	if token.ExpirationDate.Unix() < time.Now().Unix() {
+	if token.ExpirationDate.Unix() < time.Now().Add(2*time.Minute).Unix() {
 		os.Remove(fileName)
 		return nil
 	}
