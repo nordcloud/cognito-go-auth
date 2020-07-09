@@ -27,6 +27,7 @@ var templateBody = `
   </head>
 
   <body>
+	<h1>Login process complete, you can now close the window</h1>
     <div id="app"></div>
     <script src="./cognitohosteduilauncher.js"></script>
   </body>
