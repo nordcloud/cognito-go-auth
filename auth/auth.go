@@ -140,6 +140,7 @@ func (c *CognitoAuth) getTokenFromFile() *CognitoToken {
 	if err != nil {
 		return nil
 	}
+	defer file.Close()
 
 	b, err := ioutil.ReadAll(file)
 	if err != nil {
@@ -155,8 +156,7 @@ func (c *CognitoAuth) getTokenFromFile() *CognitoToken {
 	}
 	token.auth = c
 
-	//Refresh token 2 minutes before expiration
-	if token.ExpirationDate.Before(time.Now().Add(2 * time.Minute)) {
+	if token.ExpirationDate.Before(time.Now()) {
 		os.Remove(fileName)
 		return nil
 	}
@@ -171,6 +171,7 @@ func (c *CognitoAuth) saveToken(token CognitoToken) {
 		log.Warn("Failed to open or create file token", err.Error())
 		return
 	}
+	defer file.Close()
 
 	data, _ := json.Marshal(token)
 	err = file.Truncate(0)
@@ -183,7 +184,6 @@ func (c *CognitoAuth) saveToken(token CognitoToken) {
 		log.Warn("Failed to write to file token", err.Error())
 		return
 	}
-	file.Close()
 }
 
 func (c *CognitoAuth) getTokenPath() string {
