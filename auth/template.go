@@ -12,42 +12,22 @@ import (
 var templateBody = `
 <!DOCTYPE html>
 <html>
-  <head>
-    <script>
-      var amplifyCognitoConfig = {
-        region: "{{ .Region }}",
-        userPoolId: "{{ .UserPoolID }}",
-        userPoolWebClientId: "{{ .ClientID }}",
-        redirectSignIn: "http://localhost:{{ .ServerPort }}",
-        redirectSignOut: "http://localhost:{{ .ServerPort }}",
-        domain: "{{ .HostedUIDomain }}"
-      };
-      var socket = "ws://localhost:3001";
-    </script>
-  </head>
-
   <body>
 	<h1>Login process complete, you can now close this window</h1>
     <div id="app"></div>
-    <script src="./cognitohosteduilauncher.js"></script>
   </body>
 </html>`
 
-func getPageTemplate() (*template.Template, []byte, error) {
+func getPageTemplate() (*template.Template, error) {
 	log.Debug("Building auth template")
 	t := template.New("template.html")
-	staticContect, err := Asset("cognitohosteduilauncher.js")
-	if err != nil {
-		log.Error("Failed load cognitohosteduilauncher.js file", err.Error())
-		return nil, nil, err
-	}
 
-	t, err = t.Parse(templateBody)
+	t, err := t.Parse(templateBody)
 	if err != nil {
 		log.Error("Failed to parse template", err.Error())
-		return nil, nil, err
+		return nil, err
 	}
-	return t, staticContect, nil
+	return t, nil
 }
 
 func openBrowser(url string) error {

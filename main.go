@@ -16,10 +16,9 @@ var (
 	headers []string
 	body    string
 
-	userPoolID     string
-	clientID       string
-	hostedUIDomain string
-	verbose        bool
+	clientID string
+	domain   string
+	verbose  bool
 )
 
 func printResponse(resp *http.Response) {
@@ -57,10 +56,9 @@ var rootCmd = &cobra.Command{
 			return
 		}
 
-		authorizer, err := auth.GetAuthorizerFromEnv(userPoolID, clientID, hostedUIDomain)
-		if err != nil {
-			log.Error(err)
-			return
+		authorizer := auth.Auth0{
+			ClientID: clientID,
+			Domain:   domain,
 		}
 
 		req, err := http.NewRequest(method, args[0], strings.NewReader(body))
@@ -76,7 +74,7 @@ var rootCmd = &cobra.Command{
 		for i := 0; i < 2; i++ {
 			token, err := authorizer.GetToken()
 			if err != nil {
-				log.Error("Failed to generate cognito authorization token")
+				log.WithError(err).Error("Failed to generate authorization token")
 				return
 			}
 			req = token.Sign(req)
@@ -101,9 +99,9 @@ func main() {
 	rootCmd.PersistentFlags().StringVarP(&method, "request", "X", "GET", "Request method")
 	rootCmd.PersistentFlags().StringVarP(&body, "data", "d", "", "Request method")
 	rootCmd.PersistentFlags().StringArrayVarP(&headers, "header", "H", []string{}, "Request header 'HeaderName: HeaderValue' ")
-	rootCmd.PersistentFlags().StringVarP(&userPoolID, "user-pool-id", "p", "", "AWS cognito user pool ID")
+
 	rootCmd.PersistentFlags().StringVarP(&clientID, "client-id", "c", "", "AWS cognito Client ID")
-	rootCmd.PersistentFlags().StringVarP(&hostedUIDomain, "hosted-ui", "u", "", "Addres of the hosted UI")
+	rootCmd.PersistentFlags().StringVarP(&domain, "domain", "u", "", "Addres of the hosted UI")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show response headers and status code")
 	rootCmd.Execute()
 }

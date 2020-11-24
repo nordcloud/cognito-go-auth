@@ -3,26 +3,23 @@ package auth
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/net/websocket"
 )
 
 const (
-	UserPoolEnv = "USER_POOL_ID"
-	ClientEnv   = "CLIENT_ID"
-	HostedUiEnv = "HOSTED_UI"
-
-	serverPort = "3000"
+	oauthResponseType        = "code"
+	oauthCodeChallengeMethod = "S256"
+	oauthScope               = "openid profile email offline_access"
+	codeChallengeLen         = 32
+	serverPort               = "3000"
 )
 
 //Singer is the interface that wraps the Sing method
@@ -30,87 +27,38 @@ type Singer interface {
 	Sign(req *http.Request) *http.Request
 }
 
-//CognitoAuth represents the structure with cognito authorization config.
-type CognitoAuth struct {
-	UserPoolID     string
-	ClientID       string
-	HostedUIDomain string
-	ServerPort     string
-	Region         string
+//Auth0 represents the structure with auth0 authorization config.
+type Auth0 struct {
+	// Domain is the Auth0 domain without the protocol.
+	Domain   string
+	ClientID string
+
+	state        string
+	codeVerifier string
 }
 
-//CognitoToken is the type that represents the token returned by the Cognito authorizer.
-//CognitoToken implements Singer interface
-type CognitoToken struct {
-	Token          string    `json:"token"`
-	ExpirationDate time.Time `json:"expiration_date"`
-
-	auth *CognitoAuth
-}
-
-//Sign methods adds authorization header to the request
-func (c *CognitoToken) Sign(req *http.Request) *http.Request {
-	req.Header["Authorization"] = []string{c.Token}
-	return req
-}
-
-//Invalidate function removes .token file
-func (c *CognitoToken) Invalidate() {
-	if c.auth != nil {
-		os.Remove(c.auth.getTokenPath())
-	}
-}
-
-//NewCongitoAuthorizer Returns new congito authorizer
-func NewCongitoAuthorizer(UserPoolID, ClientID, HostedUIDomain string) *CognitoAuth {
-	config := &CognitoAuth{
-		UserPoolID:     UserPoolID,
-		ClientID:       ClientID,
-		HostedUIDomain: HostedUIDomain,
-		ServerPort:     serverPort,
-	}
-	config.Region = strings.Split(config.UserPoolID, "_")[0]
-	return config
-}
-
-//GetAuthorizerFromEnv creates new cognito authorizer using environment variables
-//If values passed as parameters are not empty they pverride env variables
-//If any of the required parameters is missing GetAuthorizerFromEnv return an error
-func GetAuthorizerFromEnv(UserPoolID, ClientID, HostedUIDomain string) (*CognitoAuth, error) {
-	overrideEnv := func(env, value string) string {
-		if len(value) > 0 {
-			return value
-		}
-		return os.Getenv(env)
-	}
-	config := NewCongitoAuthorizer(
-		overrideEnv(UserPoolEnv, UserPoolID),
-		overrideEnv(ClientEnv, ClientID),
-		overrideEnv(HostedUiEnv, HostedUIDomain),
-	)
-	if len(config.ClientID) == 0 || len(config.HostedUIDomain) == 0 || len(config.UserPoolID) == 0 {
-		return nil, errors.New("Missing cognito settings. Please set the USER_POOL_ID, CLIENT_ID and HOSTED_UI variables")
-	}
-
-	return config, nil
-}
-
-//GetToken function retrns cognito authorization token
-//It opens new page with cognito UI for the google authorization
-//If authorization was successfull it returns
-func (c *CognitoAuth) GetToken() (*CognitoToken, error) {
-	token := c.getTokenFromFile()
+// GetToken function return Auth0 authorization token
+// It opens new page with Auth0 universal login that redirects to localhost:3000
+func (c *Auth0) GetToken() (*OAuthToken, error) {
+	token := loadTokenFromFile(c.hash())
 	if token != nil {
 		log.Debug("Found valid token in the .token file")
 		return token, nil
 	}
 
-	responseChan, errorChan := make(chan string), make(chan error)
+	responseChan, errorChan := make(chan OAuthToken), make(chan error)
 	server := http.Server{Addr: fmt.Sprintf("localhost:%s", serverPort)}
 	defer server.Close()
-	go c.serveWebSocket(responseChan, errorChan)
-	go c.serveAuthPage(errorChan, &server)
-	err := openBrowser(fmt.Sprintf("http://localhost:%s", serverPort))
+	go c.serveAuthPage(responseChan, errorChan, &server)
+
+	loginURL, err := c.getAuth0LoginURL()
+	if err != nil {
+		return nil, fmt.Errorf("cannot generate login url for authentication: %s", err.Error())
+	}
+
+	log.Info(loginURL)
+
+	err = openBrowser(loginURL)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open the Internet browser for authentication: %s", err.Error())
 	}
@@ -118,87 +66,109 @@ func (c *CognitoAuth) GetToken() (*CognitoToken, error) {
 	select {
 	case err := <-errorChan:
 		return nil, err
-	case resp := <-responseChan:
-		token := CognitoToken{
-			Token:          resp,
-			ExpirationDate: time.Now().Local().Add(time.Hour),
-			auth:           c,
-		}
-		c.saveToken(token)
+	case token := <-responseChan:
+		token.ClientID = c.ClientID
+		token.Domain = c.Domain
+		token.save(c.hash())
 		return &token, nil
 	}
 }
 
-func (c *CognitoAuth) hash() string {
-	hash := md5.Sum([]byte(c.ClientID + c.UserPoolID + c.HostedUIDomain + c.Region))
+func (c *Auth0) hash() string {
+	hash := md5.Sum([]byte(c.ClientID + c.Domain))
 	return fmt.Sprintf("%x", hash)
 }
 
-func (c *CognitoAuth) getTokenFromFile() *CognitoToken {
-	fileName := c.getTokenPath()
-	file, err := os.OpenFile(fileName, os.O_RDONLY, 0660)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-
-	b, err := ioutil.ReadAll(file)
-	if err != nil {
-		os.Remove(fileName)
-		return nil
+func (c *Auth0) getRandomString(l int) (string, error) {
+	b := make([]byte, l)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
 
-	token := &CognitoToken{}
-	err = json.Unmarshal(b, token)
-	if err != nil {
-		os.Remove(fileName)
-		return nil
-	}
-	token.auth = c
-
-	if token.ExpirationDate.Before(time.Now()) {
-		os.Remove(fileName)
-		return nil
-	}
-
-	return token
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(b), nil
 }
 
-func (c *CognitoAuth) saveToken(token CognitoToken) {
-	os.MkdirAll(filepath.Dir(c.getTokenPath()), os.ModePerm)
-	file, err := os.OpenFile(c.getTokenPath(), os.O_WRONLY|os.O_CREATE, 0660)
+func (c *Auth0) getCodeChallenge() (string, error) {
+	randStr, err := c.getRandomString(codeChallengeLen)
 	if err != nil {
-		log.Warn("Failed to open or create file token", err.Error())
-		return
+		return "", err
 	}
-	defer file.Close()
+	c.codeVerifier = randStr
 
-	data, _ := json.Marshal(token)
-	err = file.Truncate(0)
-	if err != nil {
-		log.Warn("Failed to clear file token", err.Error())
-		return
+	hash := sha256.New()
+	if _, err := hash.Write([]byte(randStr)); err != nil {
+		return "", err
 	}
-	_, err = file.Write(data)
-	if err != nil {
-		log.Warn("Failed to write to file token", err.Error())
-		return
-	}
+
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(hash.Sum(nil)), nil
 }
 
-func (c *CognitoAuth) getTokenPath() string {
-	fileName := fmt.Sprintf(".token-%s", c.hash())
-	cacheDir, err := os.UserCacheDir()
+func (c *Auth0) getAuth0LoginURL() (string, error) {
+	challenge, err := c.getCodeChallenge()
 	if err != nil {
-		return fileName
+		return "", err
 	}
+	state, err := c.getRandomString(codeChallengeLen)
+	if err != nil {
+		return "", err
+	}
+	c.state = state
 
-	return filepath.Join(cacheDir, "cognito-cli-auth", fileName)
+	return fmt.Sprintf("https://%s/authorize?response_type=code&client_id=%s&code_challenge=%s&code_challenge_method=S256&redirect_uri=%s&scope=%s&state=%s",
+		c.Domain, c.ClientID, challenge, fmt.Sprintf("http://localhost:%s", serverPort), oauthScope, state), nil
 }
 
-func (c *CognitoAuth) serveAuthPage(errorChan chan error, server *http.Server) {
+// TokenRequest is an input used to request new token
+type TokenRequest struct {
+	GrantType    string `json:"grant_type"`
+	ClientID     string `json:"client_id"`
+	CodeVerifier string `json:"code_verifier"`
+	Code         string `json:"code"`
+	RedirectURI  string `json:"redirect_uri"`
+}
+
+func (c *Auth0) handleLoginRedirect(r *http.Request) (*OAuthToken, error) {
+	query := r.URL.Query()
+	receivedState, ok := query["state"]
+	if !ok || len(receivedState) == 0 || receivedState[0] != c.state {
+		return nil, errors.New("Received invalid oauth state")
+	}
+
+	code, ok := query["code"]
+	if !ok || len(code) == 0 {
+		return nil, errors.New("Missing code in request")
+	}
+
+	data, err := json.Marshal(TokenRequest{
+		ClientID:     c.ClientID,
+		GrantType:    "authorization_code",
+		CodeVerifier: c.codeVerifier,
+		Code:         code[0],
+		RedirectURI:  fmt.Sprintf("http://localhost:%s", serverPort),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("https://%s/oauth/token", c.Domain)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+	token := OAuthToken{}
+	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+		return nil, err
+	}
+
+	return &token, nil
+}
+
+func (c *Auth0) serveAuthPage(responseToken chan OAuthToken, errorChan chan error, server *http.Server) {
 	log.Debug(fmt.Sprintf("Serve web page localhost:%s", serverPort))
-	t, static, err := getPageTemplate()
+
+	t, err := getPageTemplate()
 	if err != nil {
 		log.Error("Failed to load auth page", err.Error())
 		errorChan <- err
@@ -206,40 +176,16 @@ func (c *CognitoAuth) serveAuthPage(errorChan chan error, server *http.Server) {
 	}
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		err := t.Execute(w, *c)
+		token, err := c.handleLoginRedirect(r)
 		if err != nil {
-			log.Error("Failed to serve auth page", err.Error())
-			errorChan <- err
-			server.Close()
-		}
-	}
-
-	serverStatic := func(w http.ResponseWriter, r *http.Request) {
-		http.ServeContent(w, r, "cognitohosteduilauncher.js", time.Now(), bytes.NewReader(static))
-	}
-
-	http.HandleFunc("/", handler)
-	http.HandleFunc("/cognitohosteduilauncher.js", serverStatic)
-	server.ListenAndServe()
-}
-
-func (c *CognitoAuth) serveWebSocket(respChan chan string, errorChan chan error) {
-	handler := func(ws *websocket.Conn) {
-		var reply string
-		if err := websocket.Message.Receive(ws, &reply); err != nil {
-			log.Error("Failed to receive data from websocker", err.Error())
 			errorChan <- err
 			return
 		}
-		log.Debug("Received token from websocket")
-		respChan <- reply
+
+		responseToken <- *token
+		t.Execute(w, *c)
 	}
 
-	server := http.NewServeMux()
-	log.Debug("Serve web socket localhost: 3001")
-	server.Handle("/", websocket.Handler(handler))
-	if err := http.ListenAndServe(":3001", server); err != nil {
-		log.Error("ListenAndServe:", err)
-		errorChan <- err
-	}
+	http.HandleFunc("/", handler)
+	server.ListenAndServe()
 }
